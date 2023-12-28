@@ -1,0 +1,177 @@
+RTC Handler Bug: Would not reach RTC handler
+30 Minutes | One line added
+Issue was that we were masking IRQ 2 on the primary PIC which masked all interrupts on the secondary PIC.
+Unmasking this interrupt caused the handler to be reached.
+
+RTC Handler Bug: Bootloop after entering RTC handler
+10 Minutes | One line change
+Was reading from the wrong port for RTC. Am now reading from the correct ports.
+
+RTC Interrupt Bug: RTC only interrupts once
+20 Minutes | Two line change
+PIC EOI for the slave was wrong. We were sending IRQ 0 EOI to both master and slave.
+Instead, we need to send IRQ 0 EOI to the slave and IRQ 2 EOI to the master.
+I also didn't read register C of the RTC, which prevented it from sending multiple interrupts.
+
+PAGING Bug: Error code on stack
+20 Minutes | Six line change
+The processor puts a special error code on the stack after a page fault exception. We did not
+account for error codes on the stack in our previous assembly linkage. To fix the error, we
+store and pop the error code from the stack to make the iret instruction return to correct EIP. 
+
+PAGING Bug: 4MB - 8MB page was mapped to PDE 0
+10 Minutes | One line change
+Originally, the page starting at 4MB was mapped to position 0 in the page directory. This would 
+cause page faults that would crash the kernel. Moving this to the correct position at page directory
+index 1 fixed the problem. Additionally, the 4MB bit in the PDE was not set resulting in lookup errors. 
+
+LINKAGE Bug: No assembly linkage, IRET would crash
+1 Hour | 30 line change
+Originally, we had no assembly linkage to return from exception handlers. We would try to use
+inline assembly to return from each exception. This would compile and run; however, it would not 
+properly return from each handler. We concluded that the compiler did not know how to actually
+build this into the proper assembly instructions. Thus, we added linkage stubs and a common
+interrupt linkage to support our interrupt/exception handlers.
+
+RTC Enable/Disable Bug: Enabling and then disabling RTC crashes kernel
+2 Hours | Slight architectural change
+I was attempting to mask RTC interrupt on the PIC from a keyboard handler... bad idea
+Now, we let the software do the work and just set a flag that prevents the RTC handler from
+doing anything useful when it does interrupt.
+
+Parse File System Bug: Trying to parse the file system would page fault
+30 Minutes | Couple lines added
+Passing mbi->mods_addr->mod_start caused page fault, because we were calling it after paging
+Solution was to cache the mod_start variable, no more page fault
+
+File System read_dentry_by_name bug: Page fault when I call this function.
+
+15 Minutes | change const char to const char *
+I put a string into a const char rather than a const char *. This caused a page fault. 
+Solution was to change the type. I found this out after printing the values in GDB.
+
+Print bug: Trying to print a buffer causes a kernel crash??
+2 Hours | Two lines changed
+What an insidious bug. I thought originally that there was a problem with my PCB wrappers,
+as when I added those it appeared to have caused this crash. Nope. Issue was in trying to access
+video memory outside of the available by getting unlucky and printing a new line char at the bottom
+of the screen, causing a page fault.
+
+Worse, normally our page fault handler would catch a bug like this... but since the page fault handler
+ALSO tries to print to the screen with page fault information, the handler itself page faulted. This caused
+an infinite page fault loop thereby crashing the kernel.
+
+The fix was in the putc function: Just do the screen_y wraparound BEFORE we try to print to video memory...
+Also, this problem is fixed by writing a proper terminal driver, but I was testing file system stuff before
+we had integrated that.
+
+File System read_dentry_by_name bug: verylargetextwithverylongname.txt cannot be properly read. There must be a buffer issue.
+The bug was that I was just blindly using a strcmp to compare the dentry's file name with the file_name passed in. This obviously
+caused an issue in this case, because it was comparing a 33-character string with a 32-character string, and 32 of the characters matched up, and 
+this in fact was the file I wanted to look for. One other factor that contributed to this was that I `continued` in my for loop if the lengths didn't match.
+
+To fix this, I continued in the for loop with the extra condition that the dentry's file name must be leq to 32. Otherwise, I used a 
+strncmp rather than a strcmp, comparing the first 32 characters.
+TERMINAL BUG: Key release
+10 minutes | 1 line change
+The state of each key was unable to be tracked because the scancode for each released key did not mask
+off the upper two bits. This caused the scancode to index the wrong key state.
+
+TERMINAL BUG: Couldn't unshift after shifting
+10 minutes | 2 line change
+After pressing shift once, the user is unable to unshift. This was because the keycode mapping for the shift
+lookup table didn't include SHIFT. This caused the logic to be unable to set the state of SHIFT back to released.
+
+TERMINAL BUG: Screen would not support test wrapping
+5 minutes | 1 line change
+The screen did not support new line wrapping because of a small logic error. The screen_x position would be incremented, 
+then it would be set to the changed position. However, screen_y relies on this value. Thus, we should change screen_y
+first, then change screen_x
+
+TERMINAL HISTORY BUG: Design changes and circular buffer headaches
+2 hours | 100 line change
+The original idea for the terminal history feature was to allow for easier debugging. The design was first approached
+by using a large circular buffer that would modify the current screen similar to how modern web apps support page up and page
+down. This proved to be difficult to implement in a cost effective and bug free way. Thus, a design change was made to just
+double buffer the screen. This would allow the history to have its own screen that would updated with the latest 25 lines. 
+A couple of bugs were found along the way but the majority of this log report is for the design decision change.
+
+PCB Stack Bug: Reading data from a file seems to overflow the pcb
+30 Minutes | Several line changed in read_data
+In read_data, we were creating a local variable data block that was 4096 bytes + some other large local vars.
+So calling read_data would overflow to the 8kB where the PCB was. Fix was to make everything pointers.
+
+Loader Bug: Loading program at an offset of 0x40 bytes instead of 0x00
+2 Hours | 1 Line change in load_program
+While loading the program, we started loading the file at an offset of 0x40 bytes. We did this to avoid loading
+the header into program memory. This is incorrect and caused page faults when running user programs like "shell"
+
+ESP Context Switch BUG: On a privilege switch from kernel to user, ESP stack was set to 132MB
+10 minutes | 1 line change in execute_context_switch
+We knew that 132MB should be put as the ESP for the user program; however, we did not account that this should 
+have 4 bytes subtracted since we write until ESP + 4. This according to little endian. 
+
+SYSCALL TRAP GATE: System Call was an Interrupt Gate
+30 minutes | 1 line change in idt_handler.h
+We initially had the system call set to interrupt gate, which disabled the interrupts in the kernel after a 
+system call. This would make is so that keyboard would not work for shell program. Instead, we changed
+to trap gate, which allowed keyboard interrupts. 
+
+PAGING SWITCH: Loading page directory loses command
+10 minutes | 3 line change in syscall.c
+Trying to load ls causes the command argument to be set to empty string. This causes program_load() to return
+-1 since empty string is not in the filesystem.  
+
+HALT BUG: Halting causes bootloop
+2 Hours | Lots of lines
+Wasn't setting up and popping the stack properly in execute and halt, this caused esp and ebp to go who knows where.
+Fix was to use inline asm to properly push correct things to the stack, then use some more asm magic in halt.
+
+HALT BUG: Returning from halt causes bootloop after a few shell commands
+3 Hours | One line change
+Wasn't setting tss.esp0 properly, it was being set to pcb + size which did not do what I think it did.
+Fix was to set it to (uint32_t) pcb + size.
+
+FISH BUG: Loading the fish program results in "rame0.txt"
+3 Hours | three deletions (quite literally)
+Diving into linker and memory spaces, the bug is tracked down to a missing byte that is not copied into the user space.
+This missing byte is specifically between the .text section and .data section, which explains why code is running 
+correctly but we get a "rame0.txt". 
+Temporary fix is this:
+/* Adjustment for fish program */
+if (strncmp(filename, "fish", 4) == 0) {
+    ret = read_data(inode_idx, 0, prog_mem + 1, length);
+    ret = read_data(inode_idx, 0, prog_mem, 0x1000);
+}
+First, it copies to a 1 byte offset fixing the .data section
+Then it normally copies into the .text section without the offset
+
+Now we've fixed the bug. The issue happened to be in file.c. The issue was that we were checking if the cur_pos == BLOCK_SIZE - 1.
+I originally did this to account for zero-indexing, but it turns out that I pre-incremented rather than post-incremented.
+This means that we were reading 4095 bytes rather than 4096. to fix this, we got rid of the - 1. 
+
+Shell/Execute bug: when typing rtc <filename> (rtc is a file, but with file type 0), the list of files print out. This is very odd.
+15 minutes | 3 lines
+When a command is typed in the terminal, the loader program will check the file system to see if a file matches that command string.
+This applies for the rtc file as well, and the problem is that rtc is also an executable, as it has the '0x7f ELF' header. Because of this, 
+this got past my checks for the '0x7f ELF' header. To fix this, I added one more check, which checks if the file is a normal file (filetype 2).
+This fixed the issue: now typing 'rtc <filename>' and '.' results in 'no such command', which is what we want.
+
+No interrupt bug: Context switching causes interrupt to fail
+20 Minutes | 1 line
+Turns out I was pushing the fake iret context while cli, this made eflags record the lack of IF flag.
+Now I make sure IF flag is being pushed, we all good.
+
+Context Switch bug: Page fault or bootloop on context switch after ping pong
+1 Hour | 1 Line
+Wasn't setting child tcb pointers properly. Now do so in execute, it works.
+
+Context switch bug: Page fault when running multiple ping pongs
+10 Minutes | 2 lines
+Didn't set the shell tcb links properly, all shells thought tcb 0 was their parent.
+
+Page fault: Page fault sometimes when executing first shell
+30 Minutes | Some lines
+Context switch would occur in the middle of gaslighting execute. When we tried to switch back,
+it would try to switch to the child, but we were in the middle of executing that child.
+Fix was to prevent interrupts from occurring in execute, halt, and setup shell.
